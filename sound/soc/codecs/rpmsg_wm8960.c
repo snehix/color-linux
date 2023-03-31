@@ -1461,7 +1461,6 @@ static int rpmsg_wm8960_codec_probe(struct platform_device *pdev)
 	int ret;
 	int repeat_reset = 10;
 
-	return 0;
 
 	wm8960 = devm_kzalloc(&pdev->dev, sizeof(struct rpmsg_wm8960_priv),
 			      GFP_KERNEL);
@@ -1570,7 +1569,6 @@ static int rpmsg_wm8960_i2c_probe(struct i2c_client *i2c,
 	int ret;
 	int repeat_reset = 10;
 
-	return 0;
 
 	wm8960 = devm_kzalloc(&i2c->dev, sizeof(struct rpmsg_wm8960_priv),
 			      GFP_KERNEL);
