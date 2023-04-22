@@ -88,7 +88,7 @@
 		regulator-name = "usb_otg1_vbus";
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
-		status = "disabled";
+		status = "okay";
 	};
 
 	reg_usb_otg2_vbus: regulator-usb-otg2-vbus {
@@ -185,6 +185,7 @@
 		model = "wm8960-audio";
 		audio-cpu = <&sai1>;
 		audio-codec = <&codec>;
+		codec-master;
 		hp-det-gpio = <&gpio2 19 GPIO_ACTIVE_HIGH>;
 		audio-routing =
 			"Headphone Jack", "HP_L",
@@ -204,6 +205,7 @@
 		model = "sii902x-audio";
 		cpu-dai = <&sai3>;
 		hdmi-controller = <&sii902x>;
+		status = "disabled";
 	};
 
 	usdhc2_pwrseq: usdhc2_pwrseq {
@@ -744,6 +746,13 @@
 			};
 		};
 	};
+	
+	tusb320@60 {
+            compatible = "ti,tusb320";
+            reg = <0x60>;
+            interrupt-parent = <&gpio1>;
+            interrupts = <13 0>;
+        };
 };
 
 &lcdif {
@@ -800,6 +809,7 @@
 			  <&clks IMX7D_SAI1_ROOT_CLK>;
 	assigned-clock-parents = <&clks IMX7D_PLL_AUDIO_POST_DIV>;
 	assigned-clock-rates = <0>, <884736000>, <36864000>;
+	clock-names = "bus","mclk0", "mclk1", "mclk2";
 	status = "okay";
 };
 
@@ -871,7 +881,7 @@
 
 &usbotg1 {
 	vbus-supply = <&reg_usb_otg1_vbus>;
-	status = "disabled";
+	status = "okay";
 };
 
 &usbotg2 {
@@ -1403,7 +1413,8 @@
 &pwm1 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_pwm1>;
-	status = "okay";
+	//status = "okay";
+	status = "disabled";
 };
 
 &iomuxc_lpsr {
@@ -1425,6 +1436,12 @@
 		>;
 	};
 
+	pinctrl_sai1_mclk: sai1grp_mclk {
+		fsl,pins = <
+			MX7D_PAD_LPSR_GPIO1_IO01__SAI1_MCLK	0x1f
+		>;
+	};
+	
 	pinctrl_sai3_mclk: sai3grp_mclk {
 		fsl,pins = <
 			MX7D_PAD_LPSR_GPIO1_IO03__SAI3_MCLK	0x1f

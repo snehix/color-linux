@@ -23,6 +23,8 @@
 #include <sound/tlv.h>
 #include <sound/wm8960.h>
 
+#include <linux/delay.h>
+
 #include "wm8960.h"
 
 /* R25 - Power 1 */
@@ -372,7 +374,7 @@ SND_SOC_DAPM_MIXER("Left Output Mixer", WM8960_POWER3, 3, 0,
 	&wm8960_loutput_mixer[0],
 	ARRAY_SIZE(wm8960_loutput_mixer)),
 SND_SOC_DAPM_MIXER("Right Output Mixer", WM8960_POWER3, 2, 0,
-	&wm8960_routput_mixer[1],
+	&wm8960_routput_mixer[0],
 	ARRAY_SIZE(wm8960_routput_mixer)),
 
 SND_SOC_DAPM_PGA("LOUT1 PGA", WM8960_POWER2, 6, 0, NULL, 0),
@@ -398,7 +400,6 @@ SND_SOC_DAPM_MIXER("Mono Output Mixer", WM8960_POWER2, 1, 0,
 	&wm8960_mono_out[0],
 	ARRAY_SIZE(wm8960_mono_out)),
 };
-
 
 /* Represent OUT3 as a PGA so that it gets turned on with LOUT1/ROUT1 */
 static const struct snd_soc_dapm_widget wm8960_dapm_widgets_capless[] = {
@@ -609,7 +610,7 @@ static const int bclk_divs[] = {
  *		- lrclk      = sysclk / dac_divs
  *		- 10 * bclk  = sysclk / bclk_divs
  *
- * @wm8960: codec private data
+ * @wm8960_priv: wm8960 codec private data
  * @mclk: MCLK used to derive sysclk
  * @sysclk_idx: sysclk_divs index for found sysclk
  * @dac_idx: dac_divs index for found lrclk
@@ -667,10 +668,6 @@ int wm8960_configure_sysclk(struct wm8960_priv *wm8960, int mclk,
  *		- freq_out    = sysclk * sysclk_divs
  *		- 10 * sysclk = bclk * bclk_divs
  *
- * 	If we cannot find an exact match for (sysclk, lrclk, bclk)
- * 	triplet, we relax the bclk such that bclk is chosen as the
- * 	closest available frequency greater than expected bclk.
- *
  * @component: component structure
  * @freq_in: input frequency used to derive freq out via PLL
  * @sysclk_idx: sysclk_divs index for found sysclk
@@ -688,23 +685,16 @@ int wm8960_configure_pll(struct snd_soc_component *component, int freq_in,
 {
 	struct wm8960_priv *wm8960 = snd_soc_component_get_drvdata(component);
 	int sysclk, bclk, lrclk, freq_out;
-	int diff, closest, best_freq_out;
+	int diff, best_freq_out;
 	int i, j, k;
 
 	bclk = wm8960->bclk;
 	lrclk = wm8960->lrclk;
-	closest = freq_in;
 
 	best_freq_out = -EINVAL;
 	*sysclk_idx = *dac_idx = *bclk_idx = -1;
 
-	/*
-	 * From Datasheet, the PLL performs best when f2 is between
-	 * 90MHz and 100MHz, the desired sysclk output is 11.2896MHz
-	 * or 12.288MHz, then sysclkdiv = 2 is the best choice.
-	 * So search sysclk_divs from 2 to 1 other than from 1 to 2.
-	 */
-	for (i = ARRAY_SIZE(sysclk_divs) - 1; i >= 0; --i) {
+	for (i = 0; i < ARRAY_SIZE(sysclk_divs); ++i) {
 		if (sysclk_divs[i] == -1)
 			continue;
 		for (j = 0; j < ARRAY_SIZE(dac_divs); ++j) {
@@ -722,13 +712,6 @@ int wm8960_configure_pll(struct snd_soc_component *component, int freq_in,
 					*bclk_idx = k;
 					return freq_out;
 				}
-				if (diff > 0 && closest > diff) {
-					*sysclk_idx = i;
-					*dac_idx = j;
-					*bclk_idx = k;
-					closest = diff;
-					best_freq_out = freq_out;
-				}
 			}
 		}
 	}
@@ -743,16 +726,9 @@ static int wm8960_configure_clocking(struct snd_soc_component *component)
 	int i, j, k;
 	int ret;
 
-	/*
-	 * For Slave mode clocking should still be configured,
-	 * so this if statement should be removed, but some platform
-	 * may not work if the sysclk is not configured, to avoid such
-	 * compatible issue, just add '!wm8960->sysclk' condition in
-	 * this if statement.
-	 */
-	if (!(iface1 & (1 << 6)) && !wm8960->sysclk) {
-		dev_warn(component->dev,
-			 "slave mode, but proceeding with no clock configuration\n");
+	if (!(iface1 & (1<<6))) {
+		dev_dbg(component->dev,
+			"Codec is slave mode, no need to configure clock\n");
 		return 0;
 	}
 
@@ -1123,11 +1099,6 @@ static bool is_pll_freq_available(unsigned int source, unsigned int target)
 	target *= 4;
 	Ndiv = target / source;
 
-	if (Ndiv < 6) {
-		source >>= 1;
-		Ndiv = target / source;
-	}
-
 	if ((Ndiv < 6) || (Ndiv > 12))
 		return false;
 
@@ -1238,6 +1209,9 @@ static int wm8960_set_dai_pll(struct snd_soc_dai *codec_dai, int pll_id,
 	if (pll_id == WM8960_SYSCLK_AUTO)
 		return 0;
 
+	if (is_pll_freq_available(freq_in, freq_out))
+		return -EINVAL;
+
 	return wm8960_set_pll(component, freq_in, freq_out);
 }
 
@@ -1347,6 +1321,7 @@ static struct snd_soc_dai_driver wm8960_dai = {
 
 static int wm8960_probe(struct snd_soc_component *component)
 {
+	int ret;
 	struct wm8960_priv *wm8960 = snd_soc_component_get_drvdata(component);
 	struct wm8960_data *pdata = &wm8960->pdata;
 
@@ -1355,8 +1330,11 @@ static int wm8960_probe(struct snd_soc_component *component)
 	else
 		wm8960->set_bias_level = wm8960_set_bias_level_out3;
 
-	snd_soc_add_component_controls(component, wm8960_snd_controls,
+	ret=snd_soc_add_component_controls(component, wm8960_snd_controls,
 				     ARRAY_SIZE(wm8960_snd_controls));
+	if(ret<0){
+		pr_debug("Failed writing audio sound control\n");
+	}
 	wm8960_add_widgets(component);
 
 	return 0;
@@ -1408,7 +1386,10 @@ static int wm8960_i2c_probe(struct i2c_client *i2c,
 	struct wm8960_data *pdata = dev_get_platdata(&i2c->dev);
 	struct wm8960_priv *wm8960;
 	int ret;
-	int repeat_reset=10;
+	int repeat_reset = 10;
+
+	/* delay here */
+	mdelay(100);
 
 	wm8960 = devm_kzalloc(&i2c->dev, sizeof(struct wm8960_priv),
 			      GFP_KERNEL);
@@ -1425,20 +1406,16 @@ static int wm8960_i2c_probe(struct i2c_client *i2c,
 	if (IS_ERR(wm8960->regmap))
 		return PTR_ERR(wm8960->regmap);
 
-	if (pdata){
-		printk("------------> memcpy pdata\n");
+	if (pdata)
 		memcpy(&wm8960->pdata, pdata, sizeof(struct wm8960_data));
-	}
-	else if (i2c->dev.of_node){
-		printk("------------> set pdata from of\n");
+	else if (i2c->dev.of_node)
 		wm8960_set_pdata_from_of(i2c, &wm8960->pdata);
-	}
 
-	//ret = wm8960_reset(wm8960->regmap);
 	do {
 		ret = wm8960_reset(wm8960->regmap);
 		repeat_reset--;
 	} while (repeat_reset > 0 && ret != 0);
+
 	if (ret != 0) {
 		dev_err(&i2c->dev, "Failed to issue reset\n");
 		return ret;
@@ -1449,6 +1426,7 @@ static int wm8960_i2c_probe(struct i2c_client *i2c,
 		do {
 			ret = regmap_update_bits(wm8960->regmap, WM8960_ADDCTL2,
 					0x4, 0x4);
+			repeat_reset--;
 		} while (repeat_reset > 0 && ret != 0);
 		if (ret != 0) {
 			dev_err(&i2c->dev, "Failed to enable LRCM: %d\n",
@@ -1482,7 +1460,8 @@ static int wm8960_i2c_probe(struct i2c_client *i2c,
 			   wm8960->pdata.hp_cfg[1] << 5);
 	regmap_update_bits(wm8960->regmap, WM8960_ADDCTL1, 3,
 			   wm8960->pdata.hp_cfg[2]);
-
+	
+	
 	i2c_set_clientdata(i2c, wm8960);
 
 	ret = devm_snd_soc_register_component(&i2c->dev,
@@ -1493,12 +1472,6 @@ static int wm8960_i2c_probe(struct i2c_client *i2c,
 
 static int wm8960_i2c_remove(struct i2c_client *client)
 {
-	/* Free any resources allocated by the driver */
-	struct wm8960_data *data = i2c_get_clientdata(client);
-	kfree(data);
-
-	/* Call the i2c_unregister_device function to unregister the device */
-	i2c_unregister_device(client);
 	return 0;
 }
 
@@ -1529,4 +1502,3 @@ module_i2c_driver(wm8960_i2c_driver);
 MODULE_DESCRIPTION("ASoC WM8960 driver");
 MODULE_AUTHOR("Liam Girdwood");
 MODULE_LICENSE("GPL");
-
